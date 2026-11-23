@@ -1,0 +1,84 @@
+name: Deploy ZIP to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.zip'        # triggers whenever you add/replace the zip
+      - '.github/workflows/deploy.yml'
+
+  workflow_dispatch:   # lets you trigger manually from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # 1. Check out the repo
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Find the ZIP file (picks the first .zip in the repo root)
+      - name: Find zip file
+        id: find_zip
+        run: |
+          ZIP=$(ls *.zip 2>/dev/null | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "❌ No .zip file found in the repo root."
+            exit 1
+          fi
+          echo "Found zip: $ZIP"
+          echo "zip_file=$ZIP" >> $GITHUB_OUTPUT
+
+      # 3. Extract zip into the _site folder
+      - name: Extract zip
+        run: |
+          mkdir -p _site
+          unzip -o "${{ steps.find_zip.outputs.zip_file }}" -d _site
+          echo "✅ Extracted contents:"
+          ls _site
+
+      # 4. Make sure index.html exists at root (handle nested folder)
+      - name: Ensure index.html is at root
+        run: |
+          if [ ! -f "_site/index.html" ]; then
+            # If the zip extracted into a single subfolder, move contents up
+            SUBDIR=$(ls -d _site/*/ 2>/dev/null | head -n 1)
+            if [ -n "$SUBDIR" ] && [ -f "${SUBDIR}index.html" ]; then
+              echo "Moving contents of $SUBDIR to _site root..."
+              mv ${SUBDIR}* _site/ 2>/dev/null || true
+              rmdir "$SUBDIR" 2>/dev/null || true
+            else
+              echo "❌ index.html not found after extraction."
+              exit 1
+            fi
+          fi
+          echo "✅ index.html is at _site/index.html"
+
+      # 5. Configure GitHub Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      # 6. Upload the extracted site as a Pages artifact
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      # 7. Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
